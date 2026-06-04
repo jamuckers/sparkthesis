@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Spark 2.0 WebXR Static PLY Viewer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        #status-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffffff;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.179.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.179.0/examples/jsm/",
+                "sparkjs": "https://cdn.jsdelivr.net/npm/@sparkjsdev/spark@2.0.0/dist/spark.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="status-overlay">Status: Initializing Core System...</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { VRButton } from 'three/addons/webxr/VRButton.js'; // <-- Import VR entry button
+        import { SparkRenderer, SplatMesh } from 'sparkjs';
+
+        let scene, camera, renderer, sparkRenderer, splatMesh, controls;
+
+        init();
+
+        async function init() {
+            const container = document.getElementById('canvas-container');
+            const statusText = document.getElementById('status-overlay');
+
+            // 1. Foundation Three.js Workspace Setup
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1.5, 2); // Set camera around standard eye level (1.5 meters up)
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            
+            // CRITICAL STEP 1: Enable the WebXR capability pipeline inside the canvas context
+            renderer.xr.enabled = true; 
+            container.appendChild(renderer.domElement);
+
+            // CRITICAL STEP 2: Append the official "Enter VR" overlay button onto the webpage DOM
+            document.body.appendChild(VRButton.createButton(renderer));
+
+            // 2. Desktop Fallback Mouse Interaction Controls (Tumble / Zoom)
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = true; 
+            controls.target.set(0, 1.5, 0); // Focus the orbit pivot near the splat position
+
+            // 3. Initialize Spark 2.0 Engine Layout
+            sparkRenderer = new SparkRenderer({
+                renderer: renderer,
+                covSplats: true, 
+                memoryPoolSize: 24000000 
+            });
+            scene.add(sparkRenderer);
+
+            // 4. Load the Single PLY Asset natively
+            statusText.innerText = "Status: Loading assets/frame_0000.ply...";
+            
+            try {
+                splatMesh = new SplatMesh({
+                    url: 'assets/frame_0000.ply',
+                    lod: false 
+                });
+                
+                // Position adjustment if your capture ground plane doesn't align natively with the VR room origin
+                splatMesh.position.set(0, 0, 0); 
+                scene.add(splatMesh);
+
+                if (splatMesh.initialized) {
+                    await splatMesh.initialized;
+                }
+
+                statusText.innerText = "Status: Content Active. Open page inside your Quest 3 Browser to view in VR.";
+            } catch (error) {
+                console.error("Pipeline failure:", error);
+                statusText.innerText = `Error: ${error.message}`;
+                statusText.style.color = "#ff4444";
+            }
+
+            window.addEventListener('resize', onWindowResize);
+
+            // CRITICAL STEP 3: Replace requestAnimationFrame with WebXR animation frame engine loop callback
+            renderer.setAnimationLoop(renderLoop);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 5. VR-Compatible Animation Rendering Loop
+        function renderLoop() {
+            // Only evaluate mouse drag inputs when viewing in normal flat desktop mode
+            if (!renderer.xr.isPresenting) {
+                controls.update();
+            }
+
+            // Handoff to Spark to perform viewport matrix transformations, stereoscopic sorting, and dual-eye rendering
+            sparkRenderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
